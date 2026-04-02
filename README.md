@@ -65,7 +65,7 @@ This keeps the Earth-Moon line horizontal and shows the free-return trajectory c
 
 - **Trajectory data**: NASA/JPL Horizons System — `https://ssd.jpl.nasa.gov/`
 - **Mission operations**: NASA/JSC Flight Dynamics Operations
-- **Built by**: JT + SOFIA
+- **Built by**: [@jonathanst29](https://x.com/jonathanst29)
 
 ## License
 

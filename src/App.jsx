@@ -305,7 +305,7 @@ export default function ArtemisII() {
       <div style={{padding:"8px 16px",borderTop:"1px solid rgba(0,200,255,.04)",display:"flex",justifyContent:"space-between",fontSize:8,color:"#1e2e42",fontFamily:"'Orbitron',sans-serif",letterSpacing:1}}>
         <span>NASA \u00B7 JPL \u00B7 ARTEMIS</span>
         <span>TRAJECTORY: {dataSource} \u00B7 PROJECTION: ECLIPTIC</span>
-        <span>SOFIA</span>
+        <span><a href="https://x.com/jonathanst29" target="_blank" rel="noopener" style={{color:"inherit",textDecoration:"none"}}>@jonathanst29</a></span>
       </div>
     </div>
   );
