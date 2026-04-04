@@ -4,7 +4,7 @@ const LAUNCH = new Date("2026-04-01T22:35:12Z").getTime();
 const MS = [
   { t: "2026-04-01T22:35:12Z", l: "LIFTOFF", d: "LC-39B, Kennedy Space Center", i: "\u{1F680}" },
   { t: "2026-04-01T22:55:12Z", l: "SOLAR ARRAYS", d: "SAWs deployed in Earth orbit", i: "\u2600\uFE0F" },
-  { t: "2026-04-02T01:59:30Z", l: "ORION/ICPS SEP", d: "Separation + proximity ops demo", i: "\u{1F6F0}\uFE0F" },
+  { t: "2026-04-02T01:59:30Z", l: "ORION/ICPS SEP", d: "Separation + proximity ops", i: "\u{1F6F0}\uFE0F" },
   { t: "2026-04-02T23:43:12Z", l: "TLI BURN", d: "Trans-Lunar Injection (~8 min)", i: "\u{1F525}" },
   { t: "2026-04-04T23:43:12Z", l: "CORRECTION #2", d: "Mid-course trajectory correction", i: "\u2699\uFE0F" },
   { t: "2026-04-06T03:04:12Z", l: "LUNAR SOI ENTRY", d: "Enters Moon sphere of influence", i: "\u{1F30C}" },
@@ -73,27 +73,40 @@ function lerp(pts, time) {
 }
 function mag(x,y,z){ return Math.sqrt(x*x+y*y+z*z); }
 
-// Fixed projection: use Moon's position at mission start to define axes, then keep them fixed
-// This way Moon orbits visibly and Orion moves along its real path
-const REF_MOON = M_STATIC[0]; // Fixed reference: Moon position at mission start
-const REF_DIST = mag(REF_MOON.x, REF_MOON.y, REF_MOON.z);
-const REF_EX = { x: REF_MOON.x/REF_DIST, y: REF_MOON.y/REF_DIST, z: REF_MOON.z/REF_DIST };
-const REF_EY = { x: -REF_EX.y, y: REF_EX.x, z: 0 };
+// Auto-fit projection: compute bounding box of all points, center and scale to SVG
+function buildProjection(allO, allM, W, H, pad) {
+  const ref = allM[0] || M_STATIC[0];
+  const rd = mag(ref.x, ref.y, ref.z);
+  const ex = { x: ref.x/rd, y: ref.y/rd, z: ref.z/rd };
+  const ey = { x: -ex.y, y: ex.x, z: 0 };
 
-function proj(pt, W, H) {
-  if (!pt) return {sx:0,sy:0};
-  const px = pt.x*REF_EX.x + pt.y*REF_EX.y + pt.z*REF_EX.z;
-  const py = pt.x*REF_EY.x + pt.y*REF_EY.y + pt.z*REF_EY.z;
-  // Scale: fit ~450,000 km range with padding
-  const sc = (W-80)*0.65 / 450000;
-  return { sx: W*0.15 + px*sc, sy: H/2 - py*sc };
+  const pts2d = [{ px: 0, py: 0 }];
+  [...allO, ...allM].forEach(p => {
+    pts2d.push({ px: p.x*ex.x+p.y*ex.y+p.z*ex.z, py: p.x*ey.x+p.y*ey.y+p.z*ey.z });
+  });
+
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+  pts2d.forEach(p => { minX=Math.min(minX,p.px); maxX=Math.max(maxX,p.px); minY=Math.min(minY,p.py); maxY=Math.max(maxY,p.py); });
+
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const sc = Math.min((W - pad*2) / rangeX, (H - pad*2) / rangeY) * 0.88;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  return function project(pt) {
+    if (!pt) return { sx: 0, sy: 0 };
+    const px = pt.x*ex.x + pt.y*ex.y + pt.z*ex.z;
+    const py = pt.x*ey.x + pt.y*ey.y + pt.z*ey.z;
+    return { sx: W/2 + (px - cx) * sc, sy: H/2 - (py - cy) * sc };
+  };
 }
 
 export default function ArtemisII() {
   const [now, setNow] = useState(Date.now());
   const [liveO, setLiveO] = useState(null);
   const [liveM, setLiveM] = useState(null);
-  const [fetchSt, setFetchSt] = useState("idle"); // idle | loading | ok | err
+  const [fetchSt, setFetchSt] = useState("idle");
   const [fetchMsg, setFetchMsg] = useState("");
   const [fetchTime, setFetchTime] = useState(null);
 
@@ -114,7 +127,6 @@ export default function ArtemisII() {
     }
   };
 
-  // Use live data if available, otherwise static
   const O = liveO || O_STATIC;
   const M = liveM || M_STATIC;
   const dataSource = liveO ? "LIVE" : "EMBEDDED";
@@ -130,24 +142,25 @@ export default function ArtemisII() {
   const dM = on && mn ? mag(on.x-mn.x,on.y-mn.y,on.z-mn.z) : 0;
   const vel = on ? mag(on.vx,on.vy,on.vz)*3600 : 0;
 
-  const W=800, H=460;
+  const W=800, H=500;
+  const proj = useMemo(() => buildProjection(O, M, W, H, 55), [O, M]);
+
   const {past,future,oS,mS,eS,moonTrail} = useMemo(() => {
     if (!mn || !O.length) return {past:"",future:"",oS:null,mS:null,eS:null,moonTrail:""};
-    const eP = proj({x:0,y:0,z:0}, W, H);
-    const mP = proj(mn, W, H);
+    const eP = proj({x:0,y:0,z:0});
+    const mP = proj(mn);
     const pp=[], fp=[];
     O.forEach(p => {
-      const sp = proj(p, W, H);
+      const sp = proj(p);
       (p.t <= now ? pp : fp).push(sp);
     });
-    const cur = on ? proj(on, W, H) : null;
+    const cur = on ? proj(on) : null;
     if (cur) { pp.push(cur); fp.unshift(cur); }
     const tp = pts => pts.map((p,i)=>`${i===0?"M":"L"}${p.sx.toFixed(1)},${p.sy.toFixed(1)}`).join(" ");
-    // Moon orbit trail
-    const mt = M.map(p => proj(p, W, H));
+    const mt = M.map(p => proj(p));
     const moonPath = mt.map((p,i)=>`${i===0?"M":"L"}${p.sx.toFixed(1)},${p.sy.toFixed(1)}`).join(" ");
     return {past:tp(pp),future:tp(fp),oS:cur,mS:mP,eS:eP,moonTrail:moonPath};
-  }, [mn, on, now]);
+  }, [mn, on, now, proj]);
 
   const lastM = [...MS].reverse().find(m => now >= new Date(m.t).getTime());
   const nextM = MS.find(m => now < new Date(m.t).getTime());
@@ -178,24 +191,23 @@ export default function ArtemisII() {
       <div style={{padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid rgba(0,200,255,.08)",background:"rgba(5,8,15,.95)",backdropFilter:"blur(20px)",zIndex:10,flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontFamily:"'Orbitron',sans-serif",fontSize:20,fontWeight:900,letterSpacing:4,background:"linear-gradient(135deg,#00c8ff,#0066ff,#8800ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>ARTEMIS II</div>
-          <div style={{fontSize:9,color:"#4a8fa8",letterSpacing:2,fontFamily:"'Orbitron',sans-serif"}}>{dataSource==="LIVE"?"LIVE TELEMETRY":"EMBEDDED TELEMETRY"} \u00B7 JPL HORIZONS \u00B7 REAL DATA</div>
+          <div style={{fontSize:9,color:"#4a8fa8",letterSpacing:2,fontFamily:"'Orbitron',sans-serif"}}>{dataSource} TELEMETRY {"\u00B7"} JPL HORIZONS</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <button className={`rb${fetchSt==="loading"?" loading":""}`} onClick={doRefetch} title="Fetch latest trajectory from JPL Horizons">
+          <button className={`rb${fetchSt==="loading"?" loading":""}`} onClick={doRefetch}>
             <svg className="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
               <path d="M1.5 8a6.5 6.5 0 0 1 11.3-4.4M14.5 8a6.5 6.5 0 0 1-11.3 4.4"/>
               <path d="M12.8 1v2.6h-2.6M3.2 15v-2.6h2.6"/>
             </svg>
-            {fetchSt==="loading"?"FETCHING":fetchSt==="ok"?"UPDATED":fetchSt==="err"?"RETRY":"REFETCH"}
+            {fetchSt==="loading"?"...":fetchSt==="ok"?"OK":fetchSt==="err"?"RETRY":"REFETCH"}
           </button>
           {fetchSt==="err" && <div style={{fontSize:7,color:"#ff6b6b",maxWidth:80,lineHeight:1.2}}>{fetchMsg}</div>}
-          {fetchSt==="ok" && <div style={{fontSize:7,color:"#00ff96",lineHeight:1.2}}>{fetchMsg}</div>}
           <div style={{display:"inline-flex",alignItems:"center",gap:6,background:"rgba(255,40,40,.12)",border:"1px solid rgba(255,40,40,.35)",color:"#ff4444",padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:700,fontFamily:"'Orbitron',sans-serif",letterSpacing:2}}>
             <div style={{width:7,height:7,background:"#ff4444",borderRadius:"50%",animation:"p 1.5s ease-in-out infinite"}}/>LIVE
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:18,fontWeight:700,fontFamily:"'Orbitron',sans-serif",color:"#00c8ff"}}>{met}</div>
-            <div style={{fontSize:8,color:"#4a8fa8",letterSpacing:1}}>MISSION ELAPSED TIME</div>
+            <div style={{fontSize:8,color:"#4a8fa8",letterSpacing:1}}>MET</div>
           </div>
         </div>
       </div>
@@ -211,11 +223,11 @@ export default function ArtemisII() {
       </div>
 
       {/* MAP */}
-      <div style={{position:"relative",background:"radial-gradient(ellipse at 25% 50%,#0a1628 0%,#05080f 70%)"}}>
+      <div style={{position:"relative",background:"radial-gradient(ellipse at 30% 50%,#0a1628 0%,#05080f 70%)"}}>
         <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}}>
           <defs>
-            <radialGradient id="eg" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#1a7aff" stopOpacity=".25"/><stop offset="100%" stopColor="#1a7aff" stopOpacity="0"/></radialGradient>
-            <radialGradient id="mg" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#aaa" stopOpacity=".15"/><stop offset="100%" stopColor="#aaa" stopOpacity="0"/></radialGradient>
+            <radialGradient id="eg" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#1a7aff" stopOpacity=".3"/><stop offset="100%" stopColor="#1a7aff" stopOpacity="0"/></radialGradient>
+            <radialGradient id="mg" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#ccc" stopOpacity=".2"/><stop offset="100%" stopColor="#ccc" stopOpacity="0"/></radialGradient>
             <radialGradient id="ef" cx="40%" cy="35%" r="60%"><stop offset="0%" stopColor="#4488ff"/><stop offset="50%" stopColor="#1a55bb"/><stop offset="100%" stopColor="#0a2244"/></radialGradient>
             <radialGradient id="mf" cx="40%" cy="35%" r="55%"><stop offset="0%" stopColor="#d4d4d4"/><stop offset="60%" stopColor="#999"/><stop offset="100%" stopColor="#666"/></radialGradient>
             <filter id="gl"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -224,31 +236,32 @@ export default function ArtemisII() {
           {stars.map((s,i)=><circle key={i} cx={`${s.x}%`} cy={`${s.y}%`} r={s.r} fill="white" opacity={s.o}/>)}
 
           {/* Moon orbit trail */}
-          {moonTrail && <path d={moonTrail} fill="none" stroke="rgba(180,180,200,.06)" strokeWidth="1" strokeDasharray="3 6"/>}
+          {moonTrail && <path d={moonTrail} fill="none" stroke="rgba(180,180,200,.07)" strokeWidth="1" strokeDasharray="3 6"/>}
 
-          {future && <path d={future} fill="none" stroke="rgba(0,200,255,.1)" strokeWidth="1.5" strokeDasharray="5 4" style={{animation:"d 3s linear infinite"}}/>}
+          {/* Orion trajectory */}
+          {future && <path d={future} fill="none" stroke="rgba(0,200,255,.12)" strokeWidth="1.5" strokeDasharray="5 4" style={{animation:"d 3s linear infinite"}}/>}
           {past && <path d={past} fill="none" stroke="rgba(0,200,255,.55)" strokeWidth="2.2" filter="url(#gl)"/>}
 
+          {/* Earth-Moon line */}
+          {eS && mS && <line x1={eS.sx} y1={eS.sy} x2={mS.sx} y2={mS.sy} stroke="rgba(0,200,255,.03)" strokeWidth=".5" strokeDasharray="2 6"/>}
+
+          {/* Earth */}
           {eS && <>
-            <circle cx={eS.sx} cy={eS.sy} r={55} fill="url(#eg)"/>
-            <circle cx={eS.sx} cy={eS.sy} r={18} fill="url(#ef)" stroke="rgba(68,136,255,.2)" strokeWidth=".7"/>
-            <circle cx={eS.sx} cy={eS.sy} r={21} fill="none" stroke="rgba(100,180,255,.08)" strokeWidth="2"/>
-            <text x={eS.sx} y={eS.sy+30} textAnchor="middle" fill="#4a8fa8" fontSize="8" fontFamily="'Orbitron',sans-serif" letterSpacing="2">EARTH</text>
+            <circle cx={eS.sx} cy={eS.sy} r={60} fill="url(#eg)"/>
+            <circle cx={eS.sx} cy={eS.sy} r={20} fill="url(#ef)" stroke="rgba(68,136,255,.2)" strokeWidth=".7"/>
+            <circle cx={eS.sx} cy={eS.sy} r={23} fill="none" stroke="rgba(100,180,255,.08)" strokeWidth="2"/>
+            <text x={eS.sx} y={eS.sy+32} textAnchor="middle" fill="#4a8fa8" fontSize="9" fontFamily="'Orbitron',sans-serif" letterSpacing="2">EARTH</text>
           </>}
+          {/* Moon */}
           {mS && <>
-            <circle cx={mS.sx} cy={mS.sy} r={40} fill="url(#mg)"/>
-            <circle cx={mS.sx} cy={mS.sy} r={12} fill="url(#mf)" stroke="rgba(180,180,180,.12)" strokeWidth=".5"/>
-            <circle cx={mS.sx-4} cy={mS.sy-3} r="1.8" fill="rgba(0,0,0,.1)"/>
-            <circle cx={mS.sx+3} cy={mS.sy+2} r="1.3" fill="rgba(0,0,0,.08)"/>
-            <text x={mS.sx} y={mS.sy+22} textAnchor="middle" fill="#6a6a7a" fontSize="8" fontFamily="'Orbitron',sans-serif" letterSpacing="2">MOON</text>
-          </>}
-          {eS && mS && <>
-            <line x1={eS.sx} y1={eS.sy} x2={mS.sx} y2={mS.sy} stroke="rgba(0,200,255,.03)" strokeWidth=".5" strokeDasharray="2 6"/>
-            <text x={(eS.sx+mS.sx)/2} y={(eS.sy+mS.sy)/2-10} textAnchor="middle" fill="rgba(0,200,255,.1)" fontSize="7" fontFamily="'Orbitron',sans-serif">
-              {mn ? `${Math.round(mag(mn.x,mn.y,mn.z)).toLocaleString()} KM` : ""}
-            </text>
+            <circle cx={mS.sx} cy={mS.sy} r={45} fill="url(#mg)"/>
+            <circle cx={mS.sx} cy={mS.sy} r={14} fill="url(#mf)" stroke="rgba(180,180,180,.15)" strokeWidth=".5"/>
+            <circle cx={mS.sx-4} cy={mS.sy-3} r="2" fill="rgba(0,0,0,.1)"/>
+            <circle cx={mS.sx+3} cy={mS.sy+2} r="1.5" fill="rgba(0,0,0,.08)"/>
+            <text x={mS.sx} y={mS.sy+24} textAnchor="middle" fill="#6a6a7a" fontSize="9" fontFamily="'Orbitron',sans-serif" letterSpacing="2">MOON</text>
           </>}
 
+          {/* Orion */}
           {oS && <>
             <circle cx={oS.sx} cy={oS.sy} r="16" fill="rgba(0,200,255,.05)" filter="url(#g2)">
               <animate attributeName="r" values="16;22;16" dur="2.5s" repeatCount="indefinite"/>
@@ -258,18 +271,19 @@ export default function ArtemisII() {
               <animate attributeName="opacity" values=".5;.12;.5" dur="2.5s" repeatCount="indefinite"/>
             </circle>
             <circle cx={oS.sx} cy={oS.sy} r="4" fill="#00c8ff" filter="url(#gl)"/>
-            <text x={oS.sx} y={oS.sy-22} textAnchor="middle" fill="#00c8ff" fontSize="8" fontFamily="'Orbitron',sans-serif" fontWeight="700" letterSpacing="1.5" filter="url(#gl)">ORION</text>
-            <text x={oS.sx} y={oS.sy-14} textAnchor="middle" fill="rgba(0,200,255,.35)" fontSize="6" fontFamily="'Orbitron',sans-serif" letterSpacing="1">"INTEGRITY"</text>
+            <text x={oS.sx} y={oS.sy-22} textAnchor="middle" fill="#00c8ff" fontSize="9" fontFamily="'Orbitron',sans-serif" fontWeight="700" letterSpacing="1.5" filter="url(#gl)">ORION</text>
+            <text x={oS.sx} y={oS.sy-13} textAnchor="middle" fill="rgba(0,200,255,.35)" fontSize="6.5" fontFamily="'Orbitron',sans-serif" letterSpacing="1">"INTEGRITY"</text>
           </>}
         </svg>
 
+        {/* Milestone overlays */}
         <div style={{position:"absolute",bottom:8,left:10,right:10,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,pointerEvents:"none"}}>
-          {lastM && <div style={{background:"rgba(5,10,20,.85)",border:"1px solid rgba(0,255,150,.15)",borderRadius:7,padding:"5px 10px",backdropFilter:"blur(10px)"}}>
+          {lastM && <div style={{background:"rgba(5,10,20,.88)",border:"1px solid rgba(0,255,150,.15)",borderRadius:7,padding:"5px 10px",backdropFilter:"blur(10px)"}}>
             <div style={{fontSize:7,color:"#00ff96",letterSpacing:2,fontFamily:"'Orbitron',sans-serif"}}>LAST MILESTONE</div>
             <div style={{fontSize:11,fontWeight:700,marginTop:1}}>{lastM.i} {lastM.l}</div>
             <div style={{fontSize:8,color:"#4a8fa8"}}>{lastM.d}</div>
           </div>}
-          {nextM && <div style={{background:"rgba(5,10,20,.85)",border:"1px solid rgba(0,200,255,.1)",borderRadius:7,padding:"5px 10px",backdropFilter:"blur(10px)",textAlign:"right"}}>
+          {nextM && <div style={{background:"rgba(5,10,20,.88)",border:"1px solid rgba(0,200,255,.1)",borderRadius:7,padding:"5px 10px",backdropFilter:"blur(10px)",textAlign:"right"}}>
             <div style={{fontSize:7,color:"#00c8ff",letterSpacing:2,fontFamily:"'Orbitron',sans-serif"}}>NEXT</div>
             <div style={{fontSize:11,fontWeight:700,marginTop:1}}>{nextM.i} {nextM.l}</div>
             <div style={{fontSize:8,color:"#4a8fa8"}}>{nextM.d}</div>
@@ -281,23 +295,23 @@ export default function ArtemisII() {
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",borderTop:"1px solid rgba(0,200,255,.06)"}}>
         <div style={{padding:"12px 14px",borderRight:"1px solid rgba(0,200,255,.06)",maxHeight:230,overflowY:"auto"}}>
           <div className="sl" style={{marginBottom:8}}>MISSION TIMELINE</div>
-          {MS.map((m,i)=>{
-            const mt=new Date(m.t).getTime(), done=now>=mt, act=lastM===m;
+          {MS.map((mi,i)=>{
+            const mt=new Date(mi.t).getTime(), done=now>=mt, act=lastM===mi;
             return (
               <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 8px",borderRadius:6,fontSize:10,borderLeft:act?"2px solid #00c8ff":"2px solid transparent",background:act?"rgba(0,200,255,.05)":"transparent"}}>
                 <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:done?"#00ff96":"rgba(60,70,90,.5)",border:act?"2px solid #00c8ff":"1px solid rgba(60,70,90,.2)",boxShadow:act?"0 0 6px rgba(0,200,255,.3)":"none"}}/>
                 <div style={{flex:1}}>
-                  <div style={{fontWeight:done?600:400,color:done?"#e0e6f0":"#3a4560"}}>{m.i} {m.l}</div>
-                  <div style={{fontSize:8,color:done?"#4a8fa8":"#2a3548"}}>{m.d}</div>
+                  <div style={{fontWeight:done?600:400,color:done?"#e0e6f0":"#3a4560"}}>{mi.i} {mi.l}</div>
+                  <div style={{fontSize:8,color:done?"#4a8fa8":"#2a3548"}}>{mi.d}</div>
                 </div>
-                {done && <span style={{color:"#00ff96",fontSize:9}}>\u2713</span>}
+                {done && <span style={{color:"#00ff96",fontSize:9}}>{"\u2713"}</span>}
               </div>
             );
           })}
         </div>
 
         <div style={{padding:"12px 14px"}}>
-          <div className="sl" style={{marginBottom:8}}>CREW \u00B7 ORION "INTEGRITY"</div>
+          <div className="sl" style={{marginBottom:8}}>CREW {"\u00B7"} ORION "INTEGRITY"</div>
           {CREW.map((c,i)=>(
             <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:"rgba(10,20,40,.5)",border:"1px solid rgba(0,200,255,.07)",borderRadius:7,marginBottom:5}}>
               <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${c.c},${c.c}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>{c.f}</div>
@@ -306,16 +320,16 @@ export default function ArtemisII() {
           ))}
           <div style={{marginTop:8,padding:"7px 10px",background:dataSource==="LIVE"?"rgba(0,255,150,.04)":"rgba(0,255,150,.02)",border:`1px solid ${dataSource==="LIVE"?"rgba(0,255,150,.15)":"rgba(0,255,150,.08)"}`,borderRadius:7,fontSize:9,color:"#4a8fa8",lineHeight:1.5}}>
             <span style={{color:dataSource==="LIVE"?"#00ff96":"#4a8fa8",fontFamily:"'Orbitron',sans-serif",fontSize:7,letterSpacing:2}}>{dataSource==="LIVE"?"\u2713 LIVE DATA":"EMBEDDED DATA"}</span><br/>
-            JPL Horizons API \u00B7 ID: -1024 \u00B7 Ecliptic J2000<br/>
-            NASA/JSC Flight Dynamics \u00B7 {O.length} vectors
+            JPL Horizons {"\u00B7"} ID: -1024 {"\u00B7"} Ecliptic J2000<br/>
+            NASA/JSC FDO {"\u00B7"} {O.length} vectors
             {fetchTime && <><br/><span style={{color:"#2a4a5a"}}>Last fetch: {new Date(fetchTime).toLocaleTimeString()}</span></>}
           </div>
         </div>
       </div>
 
       <div style={{padding:"8px 16px",borderTop:"1px solid rgba(0,200,255,.04)",display:"flex",justifyContent:"space-between",fontSize:8,color:"#1e2e42",fontFamily:"'Orbitron',sans-serif",letterSpacing:1}}>
-        <span>NASA \u00B7 JPL \u00B7 ARTEMIS</span>
-        <span>TRAJECTORY: {dataSource} \u00B7 PROJECTION: ECLIPTIC</span>
+        <span>NASA {"\u00B7"} JPL {"\u00B7"} ARTEMIS</span>
+        <span>TRAJECTORY: {dataSource} {"\u00B7"} ECLIPTIC J2000</span>
         <span><a href="https://x.com/jonathanst29" target="_blank" rel="noopener" style={{color:"inherit",textDecoration:"none"}}>@jonathanst29</a></span>
       </div>
     </div>
