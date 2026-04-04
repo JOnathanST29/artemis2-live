@@ -73,15 +73,20 @@ function lerp(pts, time) {
 }
 function mag(x,y,z){ return Math.sqrt(x*x+y*y+z*z); }
 
-function proj(pt, mn, W, H) {
-  if (!pt || !mn) return {sx:0,sy:0};
-  const md = mag(mn.x, mn.y, mn.z);
-  const ex = {x:mn.x/md, y:mn.y/md, z:mn.z/md};
-  const ey = {x:-ex.y, y:ex.x, z:0};
-  const px = pt.x*ex.x + pt.y*ex.y + pt.z*ex.z;
-  const py = pt.x*ey.x + pt.y*ey.y + pt.z*ey.z;
-  const sc = (W-60)*0.68/md;
-  return { sx: W*0.13 + px*sc, sy: H/2 - py*sc };
+// Fixed projection: use Moon's position at mission start to define axes, then keep them fixed
+// This way Moon orbits visibly and Orion moves along its real path
+const REF_MOON = M_STATIC[0]; // Fixed reference: Moon position at mission start
+const REF_DIST = mag(REF_MOON.x, REF_MOON.y, REF_MOON.z);
+const REF_EX = { x: REF_MOON.x/REF_DIST, y: REF_MOON.y/REF_DIST, z: REF_MOON.z/REF_DIST };
+const REF_EY = { x: -REF_EX.y, y: REF_EX.x, z: 0 };
+
+function proj(pt, W, H) {
+  if (!pt) return {sx:0,sy:0};
+  const px = pt.x*REF_EX.x + pt.y*REF_EX.y + pt.z*REF_EX.z;
+  const py = pt.x*REF_EY.x + pt.y*REF_EY.y + pt.z*REF_EY.z;
+  // Scale: fit ~450,000 km range with padding
+  const sc = (W-80)*0.65 / 450000;
+  return { sx: W*0.15 + px*sc, sy: H/2 - py*sc };
 }
 
 export default function ArtemisII() {
@@ -126,19 +131,22 @@ export default function ArtemisII() {
   const vel = on ? mag(on.vx,on.vy,on.vz)*3600 : 0;
 
   const W=800, H=460;
-  const {past,future,oS,mS,eS} = useMemo(() => {
-    if (!mn || !O.length) return {past:"",future:"",oS:null,mS:null,eS:null};
-    const eP = proj({x:0,y:0,z:0}, mn, W, H);
-    const mP = proj(mn, mn, W, H);
+  const {past,future,oS,mS,eS,moonTrail} = useMemo(() => {
+    if (!mn || !O.length) return {past:"",future:"",oS:null,mS:null,eS:null,moonTrail:""};
+    const eP = proj({x:0,y:0,z:0}, W, H);
+    const mP = proj(mn, W, H);
     const pp=[], fp=[];
     O.forEach(p => {
-      const sp = proj(p, mn, W, H);
+      const sp = proj(p, W, H);
       (p.t <= now ? pp : fp).push(sp);
     });
-    const cur = on ? proj(on, mn, W, H) : null;
+    const cur = on ? proj(on, W, H) : null;
     if (cur) { pp.push(cur); fp.unshift(cur); }
     const tp = pts => pts.map((p,i)=>`${i===0?"M":"L"}${p.sx.toFixed(1)},${p.sy.toFixed(1)}`).join(" ");
-    return {past:tp(pp),future:tp(fp),oS:cur,mS:mP,eS:eP};
+    // Moon orbit trail
+    const mt = M.map(p => proj(p, W, H));
+    const moonPath = mt.map((p,i)=>`${i===0?"M":"L"}${p.sx.toFixed(1)},${p.sy.toFixed(1)}`).join(" ");
+    return {past:tp(pp),future:tp(fp),oS:cur,mS:mP,eS:eP,moonTrail:moonPath};
   }, [mn, on, now]);
 
   const lastM = [...MS].reverse().find(m => now >= new Date(m.t).getTime());
@@ -215,6 +223,9 @@ export default function ArtemisII() {
           </defs>
           {stars.map((s,i)=><circle key={i} cx={`${s.x}%`} cy={`${s.y}%`} r={s.r} fill="white" opacity={s.o}/>)}
 
+          {/* Moon orbit trail */}
+          {moonTrail && <path d={moonTrail} fill="none" stroke="rgba(180,180,200,.06)" strokeWidth="1" strokeDasharray="3 6"/>}
+
           {future && <path d={future} fill="none" stroke="rgba(0,200,255,.1)" strokeWidth="1.5" strokeDasharray="5 4" style={{animation:"d 3s linear infinite"}}/>}
           {past && <path d={past} fill="none" stroke="rgba(0,200,255,.55)" strokeWidth="2.2" filter="url(#gl)"/>}
 
@@ -232,8 +243,8 @@ export default function ArtemisII() {
             <text x={mS.sx} y={mS.sy+22} textAnchor="middle" fill="#6a6a7a" fontSize="8" fontFamily="'Orbitron',sans-serif" letterSpacing="2">MOON</text>
           </>}
           {eS && mS && <>
-            <line x1={eS.sx+22} y1={eS.sy-24} x2={mS.sx-16} y2={mS.sy-24} stroke="rgba(0,200,255,.04)" strokeWidth=".5" strokeDasharray="2 5"/>
-            <text x={(eS.sx+mS.sx)/2} y={Math.min(eS.sy,mS.sy)-28} textAnchor="middle" fill="rgba(0,200,255,.12)" fontSize="7" fontFamily="'Orbitron',sans-serif">
+            <line x1={eS.sx} y1={eS.sy} x2={mS.sx} y2={mS.sy} stroke="rgba(0,200,255,.03)" strokeWidth=".5" strokeDasharray="2 6"/>
+            <text x={(eS.sx+mS.sx)/2} y={(eS.sy+mS.sy)/2-10} textAnchor="middle" fill="rgba(0,200,255,.1)" fontSize="7" fontFamily="'Orbitron',sans-serif">
               {mn ? `${Math.round(mag(mn.x,mn.y,mn.z)).toLocaleString()} KM` : ""}
             </text>
           </>}
